@@ -17,10 +17,10 @@ import inspect
 
 
 def simple_function():
-    """This is a simple function that returns a greeting message.
+    """This is a simple function that returns a greeting.
 
     Returns:
-        str: A greeting message
+        str: A friendly greeting message.
     """
     return "Hello, World!"
 
