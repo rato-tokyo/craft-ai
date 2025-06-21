@@ -280,12 +280,10 @@ class AI:
         # メッセージを送信
         response = cls._agent.invoke({"messages": cls._app_data.messages})
         
-        # 新しいメッセージ（AI応答）のみを追加
-        # response["messages"]には送信したメッセージ全体が含まれるため、
-        # 既存のメッセージ数以降の新しいメッセージのみを追加
-        current_count = len(cls._app_data.messages)
-        for message in response["messages"][current_count:]:
-            cls._app_data.add_message(message)
+        # response["messages"]で完全に置き換え
+        # LangGraphが内部でメッセージの管理（削除、更新、追加）を行うため、
+        # response["messages"]が最終的な正しい状態を表している
+        cls._app_data.messages = response["messages"]
         
         return "AI応答完了"
     
