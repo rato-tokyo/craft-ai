@@ -1,17 +1,15 @@
 #!/usr/bin/env python3
 """
-Craft AI - フラグベース循環システムによるプラグイン型AIチャットアプリケーション
+Craft AI - カスタムreducer関数によるメッセージフック型AIチャットアプリケーション
 
-ドキュメント仕様に基づく定義のみの実装
-- craft_ai_design_and_lifecycle.md に記載された仕様に準拠
-- 実装は含まず、クラス・メソッド定義のみ
+メッセージが追加されるたびにプラグインが自動実行される仕様
 """
 
 import json
 import importlib.util
 import os
 import sys
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Annotated
 from dotenv import load_dotenv
 
 # 必須ライブラリのimport（fail fast）
@@ -21,8 +19,40 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.outputs import ChatResult
 from langchain_core.callbacks import CallbackManagerForLLMRun
 from langgraph.graph import StateGraph, START, END
-from langgraph.graph.message import MessagesState
+from langgraph.graph.message import MessagesState, add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
+from typing_extensions import TypedDict
+
+
+# グローバル変数としてAppDataのインスタンスを保持
+_global_app_data = None
+
+
+def custom_message_reducer(existing: List[BaseMessage], updates: List[BaseMessage]) -> List[BaseMessage]:
+    """カスタムメッセージreducer関数 - メッセージ追加時にプラグインを自動実行"""
+    global _global_app_data
+    
+    # 標準のadd_messagesを使用してメッセージを追加
+    result = add_messages(existing, updates)
+    
+    # 新しいメッセージが追加された場合のみプラグインを実行
+    if len(result) > len(existing) and _global_app_data is not None:
+        # プラグインを実行（画面クリア + 全メッセージ表示）
+        _execute_plugins_on_message_update(_global_app_data)
+    
+    return result
+
+
+def _execute_plugins_on_message_update(app_data) -> None:
+    """メッセージ更新時にプラグインを実行"""
+    for plugin_name, plugin in app_data.plugins.items():
+        if hasattr(plugin, 'on_message_update'):
+            plugin.on_message_update(app_data)
+
+
+class CustomMessagesState(TypedDict):
+    """カスタムメッセージ状態 - メッセージ追加時にフックを実行"""
+    messages: Annotated[List[BaseMessage], custom_message_reducer]
 
 
 class CustomChatAnthropic(BaseChatModel):
@@ -102,11 +132,14 @@ class AppData:
         
         # 設定値を使用して各コンポーネントを初期化
         self._load_model(settings)
-        self._load_flags(settings)
+        self._load_messages()
         self._load_plugins(settings)
         self._load_tools(settings)
         self._load_inputs(settings)
-        self._load_messages()
+        
+        # グローバル変数にインスタンスを設定
+        global _global_app_data
+        _global_app_data = self
         
         # AI初期化（fail fast）
         AI.initialize_from_settings(self)
@@ -127,12 +160,6 @@ class AppData:
         if "model" not in settings:
             raise ValueError("settings.jsonにmodelが設定されていません")
         self.model = settings["model"]
-    
-    def _load_flags(self, settings: Dict[str, Any]) -> None:
-        """フラグ読み込み（fail fast）"""
-        if "flags" not in settings:
-            raise ValueError("settings.jsonにflagsが設定されていません")
-        self.flags = settings["flags"]
     
     def _load_plugins(self, settings: Dict[str, Any]) -> None:
         """プラグイン読み込み（fail fast）"""
@@ -209,13 +236,15 @@ class AppData:
         self.messages = [SystemMessage(content="")]
     
     def add_message(self, message: BaseMessage) -> None:
-        """メッセージを追加"""
+        """メッセージを追加 - カスタムreducerを通して処理"""
         if isinstance(message, SystemMessage):
             # SystemMessageの場合は常にmessages[0]を更新
             self.messages[0] = message
         else:
-            # その他のメッセージは末尾に追加
-            self.messages.append(message)
+            # その他のメッセージはカスタムreducerを通して追加
+            # カスタムreducerが呼ばれるように、新しいメッセージのリストを作成
+            updated_messages = custom_message_reducer(self.messages, [message])
+            self.messages = updated_messages
 
 
 class AI:
@@ -248,15 +277,15 @@ class AI:
         if valid_tools:
             llm = llm.bind_tools(valid_tools)
         
-        # ストリーミング対応LLMノードの定義
-        def llm_node(state: MessagesState):
+        # LLMノードの定義
+        def llm_node(state: CustomMessagesState):
             """LLMノード: メッセージを受け取り、AIの応答を返す"""
             messages = state["messages"]
             response = llm.invoke(messages)
             return {"messages": [response]}
         
-        # グラフの構築
-        workflow = StateGraph(MessagesState)
+        # カスタム状態を使用してグラフを構築
+        workflow = StateGraph(CustomMessagesState)
         workflow.add_node("llm", llm_node)
         
         if valid_tools:
@@ -277,13 +306,11 @@ class AI:
         if not cls._initialized or cls._agent is None:
             raise RuntimeError("AIが初期化されていません")
         
-        # メッセージを送信
-        response = cls._agent.invoke({"messages": cls._app_data.messages})
+        # カスタムreducer関数により、メッセージが追加されるたびに自動的にプラグインが実行される
+        result = cls._agent.invoke({"messages": cls._app_data.messages})
         
-        # response["messages"]で完全に置き換え
-        # LangGraphが内部でメッセージの管理（削除、更新、追加）を行うため、
-        # response["messages"]が最終的な正しい状態を表している
-        cls._app_data.messages = response["messages"]
+        # 最終的にmessagesを更新（カスタムreducerが自動的にプラグインを実行）
+        cls._app_data.messages = result["messages"]
         
         return "AI応答完了"
     
@@ -296,38 +323,6 @@ class AI:
 def get_user_input() -> str:
     """ユーザー入力を取得"""
     return input("ユーザー: ")
-
-
-def execute_plugins_until_ready_for_ai(app_data: AppData) -> None:
-    """ready_for_aiがTrueになるまでプラグインを実行"""
-    max_iterations = 100
-    iteration = 0
-    
-    while not app_data.flags.get("ready_for_ai", False) and iteration < max_iterations:
-        iteration += 1
-        
-        for plugin_name, plugin in app_data.plugins.items():
-            if hasattr(plugin, 'on_flag'):
-                plugin.on_flag(app_data)
-        
-        if iteration >= max_iterations:
-            raise RuntimeError("プラグイン実行が無限ループになりました")
-
-
-def execute_plugins_until_ready_for_user(app_data: AppData) -> None:
-    """ready_for_userがTrueになるまでプラグインを実行"""
-    max_iterations = 100
-    iteration = 0
-    
-    while not app_data.flags.get("ready_for_user", False) and iteration < max_iterations:
-        iteration += 1
-        
-        for plugin_name, plugin in app_data.plugins.items():
-            if hasattr(plugin, 'on_flag'):
-                plugin.on_flag(app_data)
-        
-        if iteration >= max_iterations:
-            raise RuntimeError("プラグイン実行が無限ループになりました")
 
 
 def close_plugins(app_data: AppData) -> None:
@@ -351,25 +346,11 @@ def main() -> None:
             if user_input.lower() == "exit":
                 break
             
-            # ユーザーメッセージを追加
+            # ユーザーメッセージを追加（カスタムreducerが自動的にプラグインを実行）
             app_data.add_message(HumanMessage(content=user_input))
             
-            # AI応答前の処理
-            app_data.flags["after_user_input"] = True
-            app_data.flags["ready_for_ai"] = False
-            execute_plugins_until_ready_for_ai(app_data)
-            
-            # AI応答
+            # AI応答（カスタムreducerにより各メッセージ追加時に自動的にプラグインが実行される）
             AI.send()
-            
-            # AI応答後の処理
-            app_data.flags["after_ai_response"] = True
-            app_data.flags["after_user_input"] = False
-            app_data.flags["ready_for_user"] = False
-            execute_plugins_until_ready_for_user(app_data)
-            
-            # フラグリセット
-            app_data.flags["after_ai_response"] = False
     
     finally:
         close_plugins(app_data)

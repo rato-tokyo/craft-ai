@@ -1,13 +1,5 @@
 {
   "model": "claude-3-5-sonnet-latest",
-  "flags": {
-    "after_user_input": false,
-    "after_ai_response": false,
-    "ready_for_ai": true,
-    "ready_for_user": true,
-    "base":true,
-    "mono_tool":true
-  },
   "plugins": [
     {
       "path":"plugins/system_prompt_from_flags/plugin.py",

@@ -17,10 +17,12 @@ import inspect
 
 
 def simple_function():
-    """簡単な関数です。
+    """単純な関数
+
+    この関数は単純な文字列を返します。
 
     Returns:
-        str: 挨拶文を返します
+        str: 単純な文字列
     """
     return "Hello, World!"
 

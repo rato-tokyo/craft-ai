@@ -28,21 +28,16 @@ class Plugin:
         sys.stdout.flush()
         time.sleep(0.1) 
     
-    def on_flag(self, app_data):
-        """フラグ処理メイン - AI、ツール、ユーザーの表示を適切に管理"""
-        # AI応答後に表示（ツール呼び出しやAIメッセージを含む）
-        if app_data["flags"]["after_ai_response"] and not app_data["flags"]["ready_for_user"]:
-            # 画面をクリア
-            self.clear_screen()
-            
-            # display_module関数を呼び出して表示文字列を取得
-            display_text = self.display_module_func(app_data.messages)
-            
-            # 文字列を表示
-            print(display_text)
-            
-            # ready_for_userフラグを設定して、次のユーザー入力を受け付けられるようにする
-            app_data["flags"]["ready_for_user"] = True
+    def on_message_update(self, app_data):
+        """メッセージ更新時の処理 - 画面をクリアして全メッセージを表示"""
+        # 画面をクリア
+        self.clear_screen()
+        
+        # display_module関数を呼び出して表示文字列を取得
+        display_text = self.display_module_func(app_data.messages)
+        
+        # 文字列を表示
+        print(display_text)
     
     def cleanup(self):
         """クリーンアップ処理"""
