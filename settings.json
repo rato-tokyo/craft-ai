@@ -40,8 +40,8 @@
     }
   ],
   "inputs": [
-    "edit_monoツールを使ってsimple_functionの戻り値をLello, World!に変更してください。create_backup=Trueを指定してバックアップファイルを作成してください。",
-    "edit_monoツールを使ってsimple_functionの戻り値をHello, World!に変更してください。バックアップは作成しないでください。",
+    "edit_monoツールを使ってsimple_functionの戻り値をLello, World!に変更してください。create_backup=Trueを指定してバックアップファイルを作成してください。ただし、test_monoは実行しないでください",
+    "edit_monoツールを使ってsimple_functionの戻り値をHello, World!に変更してください。バックアップは作成しないでください。test_monoは実行しないでください",
     "test_monoを実行してテストが成功するか確認してください。",
     "exit"
   ]

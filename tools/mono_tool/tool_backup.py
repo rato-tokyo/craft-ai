@@ -17,7 +17,6 @@ import inspect
 
 
 def simple_function():
-    """Simple function that returns a greeting"""
     return "Hello, World!"
 
 

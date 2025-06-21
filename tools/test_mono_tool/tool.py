@@ -64,8 +64,7 @@ class TestMonoToolComparison(unittest.TestCase):
         # バックアップファイルのパスを設定
         self.mono_tool_backup_py = current_dir / "tools" / "mono_tool" / "tool_backup.py"
         
-        print(f"テスト対象ファイル: {self.mono_tool_py}")
-        print(f"バックアップファイル: {self.mono_tool_backup_py}")
+
 
     def test_backup_file_exists(self):
         """バックアップファイルが存在することを確認"""
@@ -132,17 +131,18 @@ def test_mono() -> str:
         output_lines = []
         
         if result.wasSuccessful():
-            status = "OK テスト成功"
-            output_lines.append("ファイル比較テスト結果:")
-            output_lines.append(output.getvalue().strip())
+            return "OK テスト成功\n\nすべてのテストケースが通過しました。mono_tool.pyとバックアップファイルの整合性が確認されました。"
         else:
-            status = "ERROR テスト失敗"
-            output_lines.append("ファイル比較テスト結果:")
-            output_lines.append(output.getvalue().strip())
-        
-        output_lines.insert(0, status)
-        
-        return "\n".join(output_lines)
+            # 失敗の詳細を含めて返す
+            failures = []
+            for test, traceback in result.failures + result.errors:
+                if 'AssertionError:' in traceback:
+                    error_msg = traceback.split('AssertionError: ')[-1].split('\n')[0]
+                else:
+                    error_msg = 'エラーが発生しました'
+                failures.append(f"- {test}: {error_msg}")
+            
+            return f"ERROR テスト失敗\n\n{len(result.failures + result.errors)}個のテストが失敗しました:\n" + "\n".join(failures)
         
     except Exception as e:
         return f"ERROR テスト実行エラー: {str(e)}"

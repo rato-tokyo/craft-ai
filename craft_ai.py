@@ -116,7 +116,7 @@ class AppData:
                 # ツールをディクショナリに追加
                 self.tools[tool_name] = tool
             except TypeError as e:
-                print(f"警告: ツール '{tool_name}' の初期化中にエラーが発生しました: {e}")
+                pass  # エラーは無視して続行
                 # 引数なしでインスタンス化を試みる
                 tool = tool_module.Tool()
                 
@@ -245,7 +245,6 @@ class AI:
         for msg in reversed(cls._app_data.messages):
             if isinstance(msg, AIMessage):
                 return msg.content
-        
         return ""
     
     @classmethod
@@ -335,8 +334,8 @@ def main() -> None:
             else:
                 # inputs配列が空の場合はユーザー入力を求める
                 user_input = get_user_input()
-                
-            # exitコマンドの処理
+            
+            # exitコマンドの処理（inputs配列からの場合も即座に終了）
             if user_input.lower() == "exit":
                 close_plugins(app_data)
                 return
@@ -360,6 +359,11 @@ def main() -> None:
             
             # ready_for_user = trueになるまでプラグインの順次実行をループする
             execute_plugins_until_ready_for_user(app_data)
+            
+            # 同期処理を確実にするため、出力をフラッシュ
+            import sys
+            sys.stdout.flush()
+            sys.stderr.flush()
     
     except KeyboardInterrupt:
         # Ctrl+C検出時の終了処理
