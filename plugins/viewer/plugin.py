@@ -28,13 +28,13 @@ class Plugin:
         sys.stdout.flush()
         time.sleep(0.1) 
     
-    def on_message_update(self, app_data):
+    def on_message_update(self, app_data, messages):
         """メッセージ更新時の処理 - 画面をクリアして全メッセージを表示"""
         # 画面をクリア
         self.clear_screen()
         
         # display_module関数を呼び出して表示文字列を取得
-        display_text = self.display_module_func(app_data.messages)
+        display_text = self.display_module_func(messages)
         
         # 文字列を表示
         print(display_text)

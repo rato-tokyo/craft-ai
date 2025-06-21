@@ -2,12 +2,6 @@
   "model": "claude-3-5-sonnet-latest",
   "plugins": [
     {
-      "path":"plugins/system_prompt_from_flags/plugin.py",
-      "settings":{
-        "base":"plugins/system_prompt_from_flags/prompts/base.md"
-      }
-    },
-    {
       "path":"plugins/viewer/plugin.py",
       "settings":{
         "display_module":"plugins/viewer/only_content.py"

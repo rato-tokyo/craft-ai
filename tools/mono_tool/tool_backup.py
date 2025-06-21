@@ -16,15 +16,15 @@ import shutil
 import inspect
 
 
-def simple_function():
+def simple_function() -> str:
     """単純な関数
 
-    この関数は単純な文字列を返します。
+    この関数は'Hello, World!'という文字列を返すだけの単純な関数です。
 
     Returns:
-        str: 単純な文字列
+        str: 'Hello, World!'という文字列
     """
-    return "Hello, World!"
+    return "Lello, World!"
 
 
 class Tool:
