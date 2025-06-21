@@ -26,23 +26,11 @@ class Plugin:
                     with open(prompt_path, "r", encoding="utf-8") as f:
                         prompts.append(f.read())
         
-        # プロンプトが見つかった場合、システムプロンプトを更新
-        if prompts:
-            # プロンプトを連結
-            new_system_prompt = "\n\n".join(prompts)
-            
-            # システムプロンプトを更新
-            app_data.system_prompt = new_system_prompt
-            
-            # 会話履歴の先頭のSystemMessageを更新
-            if app_data.messages and isinstance(app_data.messages[0], SystemMessage):
-                app_data.messages[0] = SystemMessage(content=new_system_prompt)
-            elif app_data.messages:
-                # SystemMessageが先頭にない場合は、先頭に挿入
-                app_data.messages.insert(0, SystemMessage(content=new_system_prompt))
-            else:
-                # メッセージが空の場合は、SystemMessageを追加
-                app_data.messages.append(SystemMessage(content=new_system_prompt))
+        # プロンプトを連結
+        new_system_prompt = "\n\n".join(prompts)
+        
+        # 常にmessages[0]のSystemMessageを更新
+        app_data.messages[0] = SystemMessage(content=new_system_prompt)
     
     def cleanup(self):
         """クリーンアップ処理"""

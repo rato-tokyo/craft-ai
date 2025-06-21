@@ -11,6 +11,7 @@ import json
 import importlib.util
 import os
 import sys
+import time
 from typing import Dict, List, Any, Optional, Iterator
 from pathlib import Path
 from dotenv import load_dotenv
@@ -25,97 +26,6 @@ from langchain_core.callbacks import CallbackManagerForLLMRun
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import MessagesState
 from langgraph.prebuilt import ToolNode, tools_condition
-from rich.console import Console
-from rich.text import Text
-
-
-class UI:
-    """統一UI管理クラス"""
-    
-    def __init__(self):
-        """UIクラスの初期化"""
-        self.console = Console()
-        self._last_displayed_count = 0
-    
-    def print(self, messages):
-        """メッセージを表示する統一メソッド"""
-        # 新規メッセージのみを表示（前回表示した分をスキップ）
-        new_messages = messages[self._last_displayed_count:]
-        
-        # 新規メッセージがない場合は何も表示しない
-        if not new_messages:
-            return
-        
-        # 新規メッセージを順番に表示
-        for message in new_messages:
-            if isinstance(message, SystemMessage):
-                # システムメッセージ
-                system_text = Text(f"システム: {message.content}")
-                system_text.stylize("bold cyan")
-                self.console.print(system_text)
-            
-            elif isinstance(message, HumanMessage):
-                # ユーザーメッセージ
-                user_text = Text(f"ユーザー: {message.content}")
-                user_text.stylize("bold blue")
-                self.console.print(user_text)
-            
-            elif isinstance(message, AIMessage):
-                # AIメッセージ
-                ai_content = self._extract_ai_content(message)
-                
-                # AIのコンテンツがある場合のみ表示
-                if ai_content and ai_content.strip():
-                    ai_text = Text(f"AI: {ai_content}")
-                    ai_text.stylize("bold green")
-                    self.console.print(ai_text)
-                
-                # ツール呼び出しがある場合は、それも表示
-                if hasattr(message, 'tool_calls') and message.tool_calls:
-                    for tool_call in message.tool_calls:
-                        tool_name = tool_call.get('name', 'unknown_tool')
-                        tool_text = Text(f"AI → ツール呼び出し: {tool_name}")
-                        tool_text.stylize("bold yellow")
-                        self.console.print(tool_text)
-            
-            elif isinstance(message, ToolMessage):
-                # ToolMessage - ツール実行結果を表示
-                tool_text = Text(f"ツール: {message.content}")
-                tool_text.stylize("bold magenta")
-                self.console.print(tool_text)
-            
-            # メッセージ間の区切り線
-            self.console.print("---")
-        
-        # 表示したメッセージ数を更新
-        self._last_displayed_count = len(messages)
-        
-        # 表示完了を確実にするため、コンソールをフラッシュ
-        import sys
-        sys.stdout.flush()
-        sys.stderr.flush()
-    
-    def _extract_ai_content(self, ai_message: AIMessage) -> str:
-        """AIMessageからコンテンツを抽出する"""
-        content = ai_message.content
-        
-        if isinstance(content, str):
-            return content
-        elif isinstance(content, list):
-            # contentがリストの場合（Anthropicなど）
-            extracted_content = ""
-            for item in content:
-                if isinstance(item, dict):
-                    if 'text' in item:
-                        extracted_content += item['text']
-                    elif 'content' in item:
-                        extracted_content += str(item['content'])
-                elif isinstance(item, str):
-                    extracted_content += item
-            return extracted_content
-        else:
-            # その他の形式の場合は文字列に変換
-            return str(content) if content is not None else ""
 
 
 class CustomChatAnthropic(BaseChatModel):
@@ -171,10 +81,25 @@ class CustomChatAnthropic(BaseChatModel):
 
 
 class AppData:
-    """アプリケーションデータ管理（辞書形式アクセス）"""
+    """アプリケーションデータ管理（辞書形式アクセス）- シングルトンパターン"""
     
-    def __init__(self, config_file: str):
-        """JSONファイルから初期化"""
+    _instance = None
+    _initialized = False
+    
+    def __new__(cls, config_file: str = None):
+        """シングルトンインスタンスを返す"""
+        if cls._instance is None:
+            cls._instance = super(AppData, cls).__new__(cls)
+        return cls._instance
+    
+    def __init__(self, config_file: str = None):
+        """JSONファイルから初期化（初回のみ）"""
+        if self._initialized:
+            return
+        
+        if config_file is None:
+            raise ValueError("初回初期化時にはconfig_fileが必要です")
+        
         # .envファイルの読み込み
         load_dotenv()
         
@@ -185,7 +110,6 @@ class AppData:
         self._load_flags(settings)
         self._load_plugins(settings)
         self._load_tools(settings)
-        self._load_ui(settings)
         self._load_inputs(settings)
         self._load_messages(settings)
         
@@ -199,17 +123,20 @@ class AppData:
                 all_tool_functions.extend(tool.functions)
         
         AI.initialize_from_settings(model, all_tool_functions, self.system_prompt, self)
+        
+        # 初期化完了フラグ
+        self._initialized = True
     
     def __getitem__(self, key: str) -> Any:
-        """辞書形式アクセス"""
+        """辞書形式でのアクセスを可能にする"""
         return getattr(self, key)
     
     def __setitem__(self, key: str, value: Any) -> None:
-        """辞書形式設定"""
+        """辞書形式での設定を可能にする"""
         setattr(self, key, value)
     
     def _load_flags(self, settings: Dict[str, Any]) -> None:
-        """フラグ初期化"""
+        """フラグ読み込み"""
         self.flags = settings["flags"]
     
     def _load_plugins(self, settings: Dict[str, Any]) -> None:
@@ -228,8 +155,10 @@ class AppData:
             plugin_module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(plugin_module)
             
-            # プラグインの初期化時にプラグイン設定も渡す
+            # プラグインインスタンス作成（設定情報とAppDataへの参照を渡す）
             plugin = plugin_module.Plugin(self, plugin_settings)
+            
+            # プラグインをディクショナリに追加
             self.plugins[plugin_name] = plugin
     
     def _load_tools(self, settings: Dict[str, Any]) -> None:
@@ -248,39 +177,19 @@ class AppData:
             tool_module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(tool_module)
             
-            try:
-                # ツールインスタンス作成（設定情報とAppDataへの参照を渡す）
-                tool = tool_module.Tool(settings=tool_settings, app_data=self)
-                
-                # ツール関数をインスタンスに関連付け
-                tool.functions = []
-                for name in dir(tool_module):
-                    obj = getattr(tool_module, name)
-                    if hasattr(obj, '__call__') and hasattr(obj, 'name'):
-                        # LangChainツール関数をツールインスタンスに追加
-                        tool.functions.append(obj)
-                
-                # ツールをディクショナリに追加
-                self.tools[tool_name] = tool
-            except TypeError as e:
-                pass  # エラーは無視して続行
-                # 引数なしでインスタンス化を試みる
-                tool = tool_module.Tool()
-                
-                # ツール関数をインスタンスに関連付け
-                tool.functions = []
-                for name in dir(tool_module):
-                    obj = getattr(tool_module, name)
-                    if hasattr(obj, '__call__') and hasattr(obj, 'name'):
-                        # LangChainツール関数をツールインスタンスに追加
-                        tool.functions.append(obj)
-                
-                # ツールをディクショナリに追加
-                self.tools[tool_name] = tool
-    
-    def _load_ui(self, settings: Dict[str, Any]) -> None:
-        """UI読み込み"""
-        self.ui = UI()
+            # ツールインスタンス作成（設定情報とAppDataへの参照を渡す）
+            tool = tool_module.Tool(settings=tool_settings, app_data=self)
+            
+            # ツール関数をインスタンスに関連付け
+            tool.functions = []
+            for name in dir(tool_module):
+                obj = getattr(tool_module, name)
+                if hasattr(obj, '__call__') and hasattr(obj, 'name'):
+                    # LangChainツール関数をツールインスタンスに追加
+                    tool.functions.append(obj)
+            
+            # ツールをディクショナリに追加
+            self.tools[tool_name] = tool
     
     def _load_inputs(self, settings: Dict[str, Any]) -> None:
         """入力配列初期化"""
@@ -288,30 +197,53 @@ class AppData:
     
     def _load_messages(self, settings: Dict[str, Any]) -> None:
         """会話履歴初期化"""
-        self.messages = []
+        # システムプロンプトを空で初期化
+        self.system_prompt = ""
         
-        # システムプロンプトをメッセージとして保存
-        if "system_prompt" in settings and settings["system_prompt"]:
-            self.system_prompt = settings["system_prompt"]
-            
-            # ツール情報をシステムプロンプトに追加
-            if hasattr(self, "tools") and self.tools:
-                tool_info = "\n\n利用可能なツール:\n"
-                for tool_name, tool in self.tools.items():
-                    if hasattr(tool, 'functions'):
-                        for func in tool.functions:
-                            if hasattr(func, 'description'):
-                                tool_info += f"- {func.name}: {func.description}\n"
-                            elif hasattr(func, '__doc__') and func.__doc__:
-                                tool_info += f"- {func.name}: {func.__doc__.strip()}\n"
-                            else:
-                                tool_info += f"- {func.name}\n"
-                self.system_prompt += tool_info
-            
-            # システムメッセージを会話履歴の先頭に追加
-            self.messages = [SystemMessage(content=self.system_prompt)]
+        # ツール情報をシステムプロンプトに追加
+        if hasattr(self, "tools") and self.tools:
+            tool_info = "利用可能なツール:\n"
+            for tool_name, tool in self.tools.items():
+                if hasattr(tool, 'functions'):
+                    for func in tool.functions:
+                        if hasattr(func, 'description'):
+                            tool_info += f"- {func.name}: {func.description}\n"
+                        elif hasattr(func, '__doc__') and func.__doc__:
+                            tool_info += f"- {func.name}: {func.__doc__.strip()}\n"
+                        else:
+                            tool_info += f"- {func.name}\n"
+            self.system_prompt = tool_info
+        
+        # 常にシステムメッセージをmessages[0]に配置
+        self.messages = [SystemMessage(content=self.system_prompt)]
+    
+    def _validate_system_message_position(self) -> None:
+        """システムメッセージの位置を検証"""
+        # messages[0]がSystemMessageでない場合は例外
+        if len(self.messages) == 0 or not isinstance(self.messages[0], SystemMessage):
+            raise RuntimeError("messages[0]にSystemMessageが存在しません")
+        
+        # messages[1]以降にSystemMessageがある場合は例外
+        for i, message in enumerate(self.messages[1:], 1):
+            if isinstance(message, SystemMessage):
+                raise RuntimeError(f"messages[{i}]にSystemMessageが存在します。SystemMessageはmessages[0]にのみ配置可能です")
+    
+    def add_message(self, message: BaseMessage) -> None:
+        """メッセージを追加（位置検証付き）"""
+        # SystemMessageの場合は位置チェック
+        if isinstance(message, SystemMessage):
+            if len(self.messages) > 0:
+                # 既存のSystemMessage（messages[0]）を更新
+                self.messages[0] = message
+            else:
+                # 初回のSystemMessage追加
+                self.messages.append(message)
         else:
-            self.system_prompt = ""
+            # SystemMessage以外は通常通り追加
+            self.messages.append(message)
+        
+        # 追加後に位置検証
+        self._validate_system_message_position()
 
 
 class AI:
@@ -375,26 +307,24 @@ class AI:
     
     @classmethod
     def send(cls) -> str:
-        """AIにデータ送信してレスポンスを取得（ストリーミング対応）"""
-        if not cls._initialized or not cls._app_data:
-            raise RuntimeError("AIが初期化されていません")
+        """AIにデータ送信"""
+        # 送信前にSystemMessage位置を検証
+        cls._app_data._validate_system_message_position()
         
         # LangGraphエージェントを実行
-        try:
-            result = cls._agent.invoke({"messages": cls._app_data.messages})
+        result = cls._agent.invoke({"messages": cls._app_data.messages})
             
-            # 結果のメッセージを取得してAppDataに保存
-            cls._app_data.messages = result["messages"]
-            
-            # 最後のAIメッセージの内容を返す
-            for msg in reversed(cls._app_data.messages):
-                if isinstance(msg, AIMessage):
-                    return msg.content
-            return ""
-                
-        except Exception as e:
-            # エラー時はfail fast方針に従い、エラーを上位に伝播
-            raise RuntimeError(f"AI応答処理でエラーが発生しました: {str(e)}") from e
+        # 結果のメッセージを取得してAppDataに保存
+        cls._app_data.messages = result["messages"]
+        
+        # 受信後にSystemMessage位置を検証
+        cls._app_data._validate_system_message_position()
+        
+        # 最後のAIメッセージの内容を返す
+        for msg in reversed(cls._app_data.messages):
+            if isinstance(msg, AIMessage):
+                return msg.content
+        return ""
     
     @classmethod
     def initialize_from_settings(cls, model: str, tools: List = None, system_prompt: str = "", app_data: AppData = None) -> None:
@@ -490,7 +420,7 @@ def main() -> None:
                 return
                 
             # ユーザー入力をメッセージに追加
-            app_data.messages.append(HumanMessage(content=user_input))
+            app_data.add_message(HumanMessage(content=user_input))
             
             # ユーザー入力後フラグ設定。自動でafter_ai_response=falseになる仕様
             app_data["flags"]["after_user_input"] = True
@@ -508,11 +438,6 @@ def main() -> None:
             
             # ready_for_user = trueになるまでプラグインの順次実行をループする
             execute_plugins_until_ready_for_user(app_data)
-            
-            # 同期処理を確実にするため、出力をフラッシュ
-            import sys
-            sys.stdout.flush()
-            sys.stderr.flush()
     
     except KeyboardInterrupt:
         # Ctrl+C検出時の終了処理

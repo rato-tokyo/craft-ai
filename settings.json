@@ -1,6 +1,5 @@
 {
   "model": "claude-3-5-sonnet-latest",
-  "system_prompt": "",
   "flags": {
     "after_user_input": false,
     "after_ai_response": false,
@@ -24,10 +23,6 @@
     }
   ],
   "tools": [
-    {
-      "path": "tools/command_executor/tool.py",
-      "settings": {}
-    },
     {
       "path": "tools/mono_tool/tool.py",
       "settings": {
