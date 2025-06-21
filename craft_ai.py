@@ -11,16 +11,163 @@ import json
 import importlib.util
 import os
 import sys
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Iterator
 from pathlib import Path
 from dotenv import load_dotenv
+from pydantic import Field
 
 # 必須ライブラリのimport（fail fast）
 from langchain_anthropic import ChatAnthropic
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage, BaseMessage, AIMessageChunk
+from langchain_core.language_models import BaseChatModel
+from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
+from langchain_core.callbacks import CallbackManagerForLLMRun
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import MessagesState
 from langgraph.prebuilt import ToolNode, tools_condition
+from rich.console import Console
+from rich.text import Text
+
+
+class UI:
+    """統一UI管理クラス"""
+    
+    def __init__(self):
+        """UIクラスの初期化"""
+        self.console = Console()
+        self._last_displayed_count = 0
+    
+    def print(self, messages):
+        """メッセージを表示する統一メソッド"""
+        # 新規メッセージのみを表示（前回表示した分をスキップ）
+        new_messages = messages[self._last_displayed_count:]
+        
+        # 新規メッセージがない場合は何も表示しない
+        if not new_messages:
+            return
+        
+        # 新規メッセージを順番に表示
+        for message in new_messages:
+            if isinstance(message, SystemMessage):
+                # システムメッセージ
+                system_text = Text(f"システム: {message.content}")
+                system_text.stylize("bold cyan")
+                self.console.print(system_text)
+            
+            elif isinstance(message, HumanMessage):
+                # ユーザーメッセージ
+                user_text = Text(f"ユーザー: {message.content}")
+                user_text.stylize("bold blue")
+                self.console.print(user_text)
+            
+            elif isinstance(message, AIMessage):
+                # AIメッセージ
+                ai_content = self._extract_ai_content(message)
+                
+                # AIのコンテンツがある場合のみ表示
+                if ai_content and ai_content.strip():
+                    ai_text = Text(f"AI: {ai_content}")
+                    ai_text.stylize("bold green")
+                    self.console.print(ai_text)
+                
+                # ツール呼び出しがある場合は、それも表示
+                if hasattr(message, 'tool_calls') and message.tool_calls:
+                    for tool_call in message.tool_calls:
+                        tool_name = tool_call.get('name', 'unknown_tool')
+                        tool_text = Text(f"AI → ツール呼び出し: {tool_name}")
+                        tool_text.stylize("bold yellow")
+                        self.console.print(tool_text)
+            
+            elif isinstance(message, ToolMessage):
+                # ToolMessage - ツール実行結果を表示
+                tool_text = Text(f"ツール: {message.content}")
+                tool_text.stylize("bold magenta")
+                self.console.print(tool_text)
+            
+            # メッセージ間の区切り線
+            self.console.print("---")
+        
+        # 表示したメッセージ数を更新
+        self._last_displayed_count = len(messages)
+        
+        # 表示完了を確実にするため、コンソールをフラッシュ
+        import sys
+        sys.stdout.flush()
+        sys.stderr.flush()
+    
+    def _extract_ai_content(self, ai_message: AIMessage) -> str:
+        """AIMessageからコンテンツを抽出する"""
+        content = ai_message.content
+        
+        if isinstance(content, str):
+            return content
+        elif isinstance(content, list):
+            # contentがリストの場合（Anthropicなど）
+            extracted_content = ""
+            for item in content:
+                if isinstance(item, dict):
+                    if 'text' in item:
+                        extracted_content += item['text']
+                    elif 'content' in item:
+                        extracted_content += str(item['content'])
+                elif isinstance(item, str):
+                    extracted_content += item
+            return extracted_content
+        else:
+            # その他の形式の場合は文字列に変換
+            return str(content) if content is not None else ""
+
+
+class CustomChatAnthropic(BaseChatModel):
+    """高速化対応のカスタムChatAnthropicモデル"""
+    
+    def __init__(self, model: str = "claude-3-5-sonnet-latest", max_tokens: int = 4000, **kwargs):
+        super().__init__(**kwargs)
+        
+        # 環境変数からAPIキーを取得（fail fast）
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise RuntimeError("環境変数ANTHROPIC_API_KEYが設定されていません")
+        
+        # 内部でChatAnthropicを使用
+        self._internal_llm = ChatAnthropic(
+            model=model, 
+            max_tokens=max_tokens,
+            anthropic_api_key=api_key
+        )
+        self._model_name = model
+        self._max_tokens = max_tokens
+    
+    @property
+    def _llm_type(self) -> str:
+        """モデルタイプを返す"""
+        return "custom_chat_anthropic"
+    
+    def bind_tools(self, tools: List) -> "CustomChatAnthropic":
+        """ツールをバインドする"""
+        if tools:
+            self._internal_llm = self._internal_llm.bind_tools(tools)
+        return self
+    
+    def invoke(self, messages: List[BaseMessage], **kwargs) -> AIMessage:
+        """メッセージを送信してAI応答を取得"""
+        return self._internal_llm.invoke(messages, **kwargs)
+    
+    def stream(self, messages: List[BaseMessage], **kwargs):
+        """ストリーミングでメッセージを送信"""
+        return self._internal_llm.stream(messages, **kwargs)
+    
+    def _generate(
+        self,
+        messages: List[BaseMessage],
+        stop: Optional[List[str]] = None,
+        run_manager: Optional[CallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        """同期的にチャット応答を生成"""
+        # 内部LLMに処理を委譲
+        result = self._internal_llm._generate(messages, stop, run_manager, **kwargs)
+        return result
 
 
 class AppData:
@@ -133,8 +280,7 @@ class AppData:
     
     def _load_ui(self, settings: Dict[str, Any]) -> None:
         """UI読み込み"""
-        self.ui = None
-        # UI実装は省略（Richライブラリを使用予定）
+        self.ui = UI()
     
     def _load_inputs(self, settings: Dict[str, Any]) -> None:
         """入力配列初期化"""
@@ -184,13 +330,8 @@ class AI:
         # AppDataの参照を保存
         cls._app_data = app_data
         
-        # 環境変数からAPIキーを取得
-        api_key = os.environ.get("ANTHROPIC_API_KEY")
-        if not api_key:
-            raise RuntimeError("環境変数ANTHROPIC_API_KEYが設定されていません")
-        
-        # ChatAnthropicの初期化
-        llm = ChatAnthropic(model=model, max_tokens=4000)
+        # CustomChatAnthropicの初期化（fail fast）
+        llm = CustomChatAnthropic(model=model, max_tokens=4000)
         
         # ツールのバインド
         valid_tools = []
@@ -202,10 +343,12 @@ class AI:
             if valid_tools:
                 llm = llm.bind_tools(valid_tools)
         
-        # LLMノードの定義
+        # ストリーミング対応LLMノードの定義
         def llm_node(state: MessagesState):
-            """LLMノード: メッセージを受け取り、AIの応答を返す"""
+            """LLMノード: メッセージを受け取り、AIの応答を返す（ストリーミング対応）"""
             messages = state["messages"]
+            
+            # 直接的な応答生成（ストリーミングは後で実装）
             response = llm.invoke(messages)
             return {"messages": [response]}
         
@@ -221,6 +364,7 @@ class AI:
             workflow.add_edge(START, "llm")
             workflow.add_conditional_edges("llm", tools_condition)
             workflow.add_edge("tools", "llm")
+            workflow.add_edge("llm", END)
         else:
             workflow.add_edge(START, "llm")
             workflow.add_edge("llm", END)
@@ -231,21 +375,26 @@ class AI:
     
     @classmethod
     def send(cls) -> str:
-        """AIにデータ送信してレスポンスを取得"""
+        """AIにデータ送信してレスポンスを取得（ストリーミング対応）"""
         if not cls._initialized or not cls._app_data:
             raise RuntimeError("AIが初期化されていません")
         
         # LangGraphエージェントを実行
-        result = cls._agent.invoke({"messages": cls._app_data.messages})
-        
-        # 結果のメッセージを取得してAppDataに保存
-        cls._app_data.messages = result["messages"]
-        
-        # 最後のAIメッセージの内容を返す
-        for msg in reversed(cls._app_data.messages):
-            if isinstance(msg, AIMessage):
-                return msg.content
-        return ""
+        try:
+            result = cls._agent.invoke({"messages": cls._app_data.messages})
+            
+            # 結果のメッセージを取得してAppDataに保存
+            cls._app_data.messages = result["messages"]
+            
+            # 最後のAIメッセージの内容を返す
+            for msg in reversed(cls._app_data.messages):
+                if isinstance(msg, AIMessage):
+                    return msg.content
+            return ""
+                
+        except Exception as e:
+            # エラー時はfail fast方針に従い、エラーを上位に伝播
+            raise RuntimeError(f"AI応答処理でエラーが発生しました: {str(e)}") from e
     
     @classmethod
     def initialize_from_settings(cls, model: str, tools: List = None, system_prompt: str = "", app_data: AppData = None) -> None:

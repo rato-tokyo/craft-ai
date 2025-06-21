@@ -1,4 +1,5 @@
 import os
+from langchain_core.messages import SystemMessage
 
 class Plugin:
     def __init__(self, app_data, plugin_settings=None):
@@ -33,10 +34,15 @@ class Plugin:
             # システムプロンプトを更新
             app_data.system_prompt = new_system_prompt
             
-            # 会話履歴の先頭のシステムメッセージを更新
-            if app_data.messages and hasattr(app_data.messages[0], 'type') and app_data.messages[0].type == "system":
-                from langchain_core.messages import SystemMessage
+            # 会話履歴の先頭のSystemMessageを更新
+            if app_data.messages and isinstance(app_data.messages[0], SystemMessage):
                 app_data.messages[0] = SystemMessage(content=new_system_prompt)
+            elif app_data.messages:
+                # SystemMessageが先頭にない場合は、先頭に挿入
+                app_data.messages.insert(0, SystemMessage(content=new_system_prompt))
+            else:
+                # メッセージが空の場合は、SystemMessageを追加
+                app_data.messages.append(SystemMessage(content=new_system_prompt))
     
     def cleanup(self):
         """クリーンアップ処理"""

@@ -1,61 +1,41 @@
 from rich.console import Console
-from rich.panel import Panel
 from rich.text import Text
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
+import sys
 
 def display(messages):
-    """メッセージのcontentを適切に表示する関数 - AI、ツール、ユーザー、システムを明確に区別"""
+    """メッセージのcontentを適切に表示する関数 - シンプルな順次表示"""
+    print(f"[DEBUG] display() called with {len(messages)} messages", file=sys.stderr)
     console = Console()
     
-    # 全てのメッセージを表示対象とする（SystemMessageも含む）
-    display_messages = messages
-    
-    # 最新のユーザーメッセージから始まる一連の会話を表示
-    if len(display_messages) > 0:
-        # 最後のHumanMessageのインデックスを見つける
-        last_human_idx = -1
-        for i in range(len(display_messages) - 1, -1, -1):
-            if isinstance(display_messages[i], HumanMessage):
-                last_human_idx = i
-                break
+    # 全てのメッセージを順番に表示
+    for i, message in enumerate(messages):
+        print(f"[DEBUG] Processing message {i+1}: {type(message).__name__}", file=sys.stderr)
         
-        if last_human_idx >= 0:
-            # SystemMessageがある場合は、それも含めて表示
-            # SystemMessageは通常会話の最初にあるので、さらに前を確認
-            start_idx = last_human_idx
-            for i in range(last_human_idx - 1, -1, -1):
-                if isinstance(display_messages[i], SystemMessage):
-                    start_idx = i
-                    break
-                elif isinstance(display_messages[i], HumanMessage):
-                    # 別のHumanMessageが見つかったら停止
-                    break
-            
-            display_messages = display_messages[start_idx:]
-    
-    # メッセージタイプごとに適切に表示
-    for message in display_messages:
         if isinstance(message, SystemMessage):
             # システムメッセージ
             system_text = Text(f"システム: {message.content}")
             system_text.stylize("bold cyan")
             console.print(system_text)
+            print(f"[DEBUG] Displayed SystemMessage", file=sys.stderr)
         
         elif isinstance(message, HumanMessage):
             # ユーザーメッセージ
             user_text = Text(f"ユーザー: {message.content}")
             user_text.stylize("bold blue")
             console.print(user_text)
+            print(f"[DEBUG] Displayed HumanMessage", file=sys.stderr)
         
         elif isinstance(message, AIMessage):
             # AIメッセージ
             ai_content = _extract_ai_content(message)
             
             # AIのコンテンツがある場合のみ表示
-            if ai_content.strip():
+            if ai_content and ai_content.strip():
                 ai_text = Text(f"AI: {ai_content}")
                 ai_text.stylize("bold green")
                 console.print(ai_text)
+                print(f"[DEBUG] Displayed AIMessage with content", file=sys.stderr)
             
             # ツール呼び出しがある場合は、それも表示
             if hasattr(message, 'tool_calls') and message.tool_calls:
@@ -64,26 +44,23 @@ def display(messages):
                     tool_text = Text(f"AI → ツール呼び出し: {tool_name}")
                     tool_text.stylize("bold yellow")
                     console.print(tool_text)
+                    print(f"[DEBUG] Displayed tool call: {tool_name}", file=sys.stderr)
         
         elif isinstance(message, ToolMessage):
             # ツールメッセージ - ツール実行結果を表示
             tool_text = Text(f"ツール: {message.content}")
             tool_text.stylize("bold magenta")
             console.print(tool_text)
-        
-        else:
-            # その他のメッセージタイプ（念のため）
-            other_text = Text(f"その他: {message.content}")
-            other_text.stylize("dim")
-            console.print(other_text)
+            print(f"[DEBUG] Displayed ToolMessage", file=sys.stderr)
         
         # メッセージ間の区切り線
         console.print("---")
     
-    # 同期処理のため、出力を確実にフラッシュ
-    import sys
+    print(f"[DEBUG] About to flush stdout/stderr", file=sys.stderr)
+    # 表示完了を確実にするため、コンソールをフラッシュ
     sys.stdout.flush()
     sys.stderr.flush()
+    print(f"[DEBUG] Flush completed", file=sys.stderr)
 
 
 def _extract_ai_content(ai_message: AIMessage) -> str:
@@ -106,6 +83,6 @@ def _extract_ai_content(ai_message: AIMessage) -> str:
         return extracted_content
     else:
         # その他の形式の場合は文字列に変換
-        return str(content)
+        return str(content) if content is not None else ""
 
 

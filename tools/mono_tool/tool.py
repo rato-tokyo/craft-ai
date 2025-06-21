@@ -16,9 +16,13 @@ import shutil
 import inspect
 
 
-def simple_function():
-    """This is a simple function that returns a greeting."""
-    return "Hello, World!"
+def simple_function() -> str:
+    """単純な関数です。
+
+    Returns:
+        str: 簡単なメッセージを返します。
+    """
+    return "Lello, World!"
 
 
 class Tool:
@@ -336,13 +340,12 @@ def edit_mono(
         if not os.path.exists(file_path):
             return f"ERROR: ファイルが存在しません: {file_path}"
 
-        # バックアップ作成（オプション）
+        # バックアップ作成（編集処理の前に実行）
         backup_path = ""
+        backup_msg = ""
         if create_backup:
             backup_path = create_backup_file(file_path)
             backup_msg = f"\nバックアップファイル: {backup_path}"
-        else:
-            backup_msg = ""
 
         # element_typeの正規化と処理分岐
         if element_type in ["class_method", "method"]:
