@@ -1,0 +1,48 @@
+{
+  "model": "claude-3-5-sonnet-latest",
+  "system_prompt": "",
+  "flags": {
+    "after_user_input": false,
+    "after_ai_response": false,
+    "ready_for_ai": true,
+    "ready_for_user": true,
+    "base":true,
+    "mono_tool":true
+  },
+  "plugins": [
+    {
+      "path":"plugins/system_prompt_from_flags/plugin.py",
+      "settings":{
+        "base":"plugins/system_prompt_from_flags/prompts/base.md"
+      }
+    },
+    {
+      "path":"plugins/viewer/plugin.py",
+      "settings":{
+        "display_module":"plugins/viewer/only_content.py"
+      }
+    }
+  ],
+  "tools": [
+    {
+      "path": "tools/command_executor/tool.py",
+      "settings": {}
+    },
+    {
+      "path": "tools/mono_tool/tool.py",
+      "settings": {
+        "file_path": "tools/mono_tool/tool.py"
+      }
+    },
+    {
+      "path": "tools/test_mono_tool/tool.py",
+      "settings": {}
+    }
+  ],
+  "inputs": [
+    "edit_monoツールを使ってsimple_functionの戻り値をLello, World!に変更してください。create_backup=Trueを指定してバックアップファイルを作成してください。",
+    "edit_monoツールを使ってsimple_functionの戻り値をHello, World!に変更してください。バックアップは作成しないでください。",
+    "test_monoを実行してテストが成功するか確認してください。",
+    "exit"
+  ]
+} 
