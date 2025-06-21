@@ -1,35 +1,46 @@
 import importlib.util
 import os
 import sys
+import time
 
 class Plugin:
     def __init__(self, app_data, plugin_settings=None):
         self.name = "viewer"
         self.settings = plugin_settings or {}
-        # UIクラスをonly_content.pyから動的にimport
-        self._load_ui_class()
+        # 表示モジュールを動的にロード
+        self._load_display_module()
     
-    def _load_ui_class(self):
-        """only_content.pyからUIクラスを動的にimportする"""
-        # only_content.pyのパスを取得
-        current_dir = os.path.dirname(__file__)
-        only_content_path = os.path.join(current_dir, "only_content.py")
+    def _load_display_module(self):
+        """settings.jsonのdisplay_moduleから表示モジュールを動的にロードする"""
+        display_module_path = self.settings.get("display_module")
         
         # モジュールの読み込み
-        spec = importlib.util.spec_from_file_location("only_content", only_content_path)
-        only_content_module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(only_content_module)
+        spec = importlib.util.spec_from_file_location("display_module", display_module_path)
+        display_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(display_module)
         
-        # UIクラスを取得してインスタンス作成
-        UI = only_content_module.UI
-        self.ui = UI()
+        # display_module関数を取得
+        self.display_module_func = display_module.display_module
+    
+    def clear_screen(self):
+        """画面クリア（Windows対応）"""
+        sys.stdout.write('\033[3J\033[H\033[2J')  # スクロールバック+カーソル移動+画面クリア
+        sys.stdout.flush()
+        time.sleep(0.1) 
     
     def on_flag(self, app_data):
         """フラグ処理メイン - AI、ツール、ユーザーの表示を適切に管理"""
         # AI応答後に表示（ツール呼び出しやAIメッセージを含む）
         if app_data["flags"]["after_ai_response"] and not app_data["flags"]["ready_for_user"]:
-            # only_content.pyのUIクラスを使用してメッセージを表示
-            self.ui.print(app_data.messages)
+            # 画面をクリア
+            self.clear_screen()
+            
+            # display_module関数を呼び出して表示文字列を取得
+            display_text = self.display_module_func(app_data.messages)
+            
+            # 文字列を表示
+            print(display_text)
+            
             # ready_for_userフラグを設定して、次のユーザー入力を受け付けられるようにする
             app_data["flags"]["ready_for_user"] = True
     

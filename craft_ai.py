@@ -11,17 +11,14 @@ import json
 import importlib.util
 import os
 import sys
-import time
-from typing import Dict, List, Any, Optional, Iterator
-from pathlib import Path
+from typing import Dict, List, Any, Optional
 from dotenv import load_dotenv
-from pydantic import Field
 
 # 必須ライブラリのimport（fail fast）
 from langchain_anthropic import ChatAnthropic
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage, BaseMessage, AIMessageChunk
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, BaseMessage
 from langchain_core.language_models import BaseChatModel
-from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
+from langchain_core.outputs import ChatResult
 from langchain_core.callbacks import CallbackManagerForLLMRun
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import MessagesState
@@ -31,7 +28,7 @@ from langgraph.prebuilt import ToolNode, tools_condition
 class CustomChatAnthropic(BaseChatModel):
     """高速化対応のカスタムChatAnthropicモデル"""
     
-    def __init__(self, model: str = "claude-3-5-sonnet-latest", max_tokens: int = 4000, **kwargs):
+    def __init__(self, model: str, max_tokens: int = 4000, **kwargs):
         super().__init__(**kwargs)
         
         # 環境変数からAPIキーを取得（fail fast）
@@ -45,8 +42,6 @@ class CustomChatAnthropic(BaseChatModel):
             max_tokens=max_tokens,
             anthropic_api_key=api_key
         )
-        self._model_name = model
-        self._max_tokens = max_tokens
     
     @property
     def _llm_type(self) -> str:
@@ -75,7 +70,6 @@ class CustomChatAnthropic(BaseChatModel):
         **kwargs: Any,
     ) -> ChatResult:
         """同期的にチャット応答を生成"""
-        # 内部LLMに処理を委譲
         result = self._internal_llm._generate(messages, stop, run_manager, **kwargs)
         return result
 
@@ -107,22 +101,15 @@ class AppData:
             settings = json.load(f)
         
         # 設定値を使用して各コンポーネントを初期化
+        self._load_model(settings)
         self._load_flags(settings)
         self._load_plugins(settings)
         self._load_tools(settings)
         self._load_inputs(settings)
-        self._load_messages(settings)
+        self._load_messages()
         
         # AI初期化（fail fast）
-        model = settings.get("model", "claude-3-5-sonnet-latest")
-        
-        # すべてのツール関数を収集
-        all_tool_functions = []
-        for tool_name, tool in self.tools.items():
-            if hasattr(tool, 'functions'):
-                all_tool_functions.extend(tool.functions)
-        
-        AI.initialize_from_settings(model, all_tool_functions, self.system_prompt, self)
+        AI.initialize_from_settings(self)
         
         # 初期化完了フラグ
         self._initialized = True
@@ -135,15 +122,29 @@ class AppData:
         """辞書形式での設定を可能にする"""
         setattr(self, key, value)
     
+    def _load_model(self, settings: Dict[str, Any]) -> None:
+        """モデル設定読み込み（fail fast）"""
+        if "model" not in settings:
+            raise ValueError("settings.jsonにmodelが設定されていません")
+        self.model = settings["model"]
+    
     def _load_flags(self, settings: Dict[str, Any]) -> None:
-        """フラグ読み込み"""
+        """フラグ読み込み（fail fast）"""
+        if "flags" not in settings:
+            raise ValueError("settings.jsonにflagsが設定されていません")
         self.flags = settings["flags"]
     
     def _load_plugins(self, settings: Dict[str, Any]) -> None:
-        """プラグイン読み込み"""
-        self.plugins = {}  # プラグイン名をキーとしてプラグインインスタンスを保存
+        """プラグイン読み込み（fail fast）"""
+        if "plugins" not in settings:
+            raise ValueError("settings.jsonにpluginsが設定されていません")
+        
+        self.plugins = {}
         
         for plugin_config in settings["plugins"]:
+            if "path" not in plugin_config:
+                raise ValueError("プラグイン設定にpathが設定されていません")
+            
             plugin_path = plugin_config["path"]
             plugin_settings = plugin_config.get("settings", {})
             
@@ -155,17 +156,23 @@ class AppData:
             plugin_module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(plugin_module)
             
-            # プラグインインスタンス作成（設定情報とAppDataへの参照を渡す）
+            # プラグインインスタンス作成
             plugin = plugin_module.Plugin(self, plugin_settings)
             
             # プラグインをディクショナリに追加
             self.plugins[plugin_name] = plugin
     
     def _load_tools(self, settings: Dict[str, Any]) -> None:
-        """ツール読み込み"""
-        self.tools = {}  # ツール名をキーとしてツールインスタンスを保存
+        """ツール読み込み（fail fast）"""
+        if "tools" not in settings:
+            raise ValueError("settings.jsonにtoolsが設定されていません")
+        
+        self.tools = {}
         
         for tool_config in settings["tools"]:
+            if "path" not in tool_config:
+                raise ValueError("ツール設定にpathが設定されていません")
+            
             tool_path = tool_config["path"]
             tool_settings = tool_config.get("settings", {})
             
@@ -177,7 +184,7 @@ class AppData:
             tool_module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(tool_module)
             
-            # ツールインスタンス作成（設定情報とAppDataへの参照を渡す）
+            # ツールインスタンス作成
             tool = tool_module.Tool(settings=tool_settings, app_data=self)
             
             # ツール関数をインスタンスに関連付け
@@ -185,65 +192,30 @@ class AppData:
             for name in dir(tool_module):
                 obj = getattr(tool_module, name)
                 if hasattr(obj, '__call__') and hasattr(obj, 'name'):
-                    # LangChainツール関数をツールインスタンスに追加
                     tool.functions.append(obj)
             
             # ツールをディクショナリに追加
             self.tools[tool_name] = tool
     
     def _load_inputs(self, settings: Dict[str, Any]) -> None:
-        """入力配列初期化"""
+        """入力配列初期化（fail fast）"""
+        if "inputs" not in settings:
+            raise ValueError("settings.jsonにinputsが設定されていません")
         self.inputs = settings["inputs"]
     
-    def _load_messages(self, settings: Dict[str, Any]) -> None:
+    def _load_messages(self) -> None:
         """会話履歴初期化"""
-        # システムプロンプトを空で初期化
-        self.system_prompt = ""
-        
-        # ツール情報をシステムプロンプトに追加
-        if hasattr(self, "tools") and self.tools:
-            tool_info = "利用可能なツール:\n"
-            for tool_name, tool in self.tools.items():
-                if hasattr(tool, 'functions'):
-                    for func in tool.functions:
-                        if hasattr(func, 'description'):
-                            tool_info += f"- {func.name}: {func.description}\n"
-                        elif hasattr(func, '__doc__') and func.__doc__:
-                            tool_info += f"- {func.name}: {func.__doc__.strip()}\n"
-                        else:
-                            tool_info += f"- {func.name}\n"
-            self.system_prompt = tool_info
-        
-        # 常にシステムメッセージをmessages[0]に配置
-        self.messages = [SystemMessage(content=self.system_prompt)]
-    
-    def _validate_system_message_position(self) -> None:
-        """システムメッセージの位置を検証"""
-        # messages[0]がSystemMessageでない場合は例外
-        if len(self.messages) == 0 or not isinstance(self.messages[0], SystemMessage):
-            raise RuntimeError("messages[0]にSystemMessageが存在しません")
-        
-        # messages[1]以降にSystemMessageがある場合は例外
-        for i, message in enumerate(self.messages[1:], 1):
-            if isinstance(message, SystemMessage):
-                raise RuntimeError(f"messages[{i}]にSystemMessageが存在します。SystemMessageはmessages[0]にのみ配置可能です")
+        # プラグインがmessages[0]のSystemMessageを期待するため、空のSystemMessageで初期化
+        self.messages = [SystemMessage(content="")]
     
     def add_message(self, message: BaseMessage) -> None:
-        """メッセージを追加（位置検証付き）"""
-        # SystemMessageの場合は位置チェック
+        """メッセージを追加"""
         if isinstance(message, SystemMessage):
-            if len(self.messages) > 0:
-                # 既存のSystemMessage（messages[0]）を更新
-                self.messages[0] = message
-            else:
-                # 初回のSystemMessage追加
-                self.messages.append(message)
+            # SystemMessageの場合は常にmessages[0]を更新
+            self.messages[0] = message
         else:
-            # SystemMessage以外は通常通り追加
+            # その他のメッセージは末尾に追加
             self.messages.append(message)
-        
-        # 追加後に位置検証
-        self._validate_system_message_position()
 
 
 class AI:
@@ -254,7 +226,7 @@ class AI:
     _app_data = None
     
     @classmethod
-    def _initialize(cls, model: str, system_prompt: str, app_data: AppData, tools: List = None) -> None:
+    def _initialize(cls, app_data: AppData) -> None:
         """AIエージェントの初期化"""
         if cls._initialized:
             return
@@ -263,24 +235,23 @@ class AI:
         cls._app_data = app_data
         
         # CustomChatAnthropicの初期化（fail fast）
-        llm = CustomChatAnthropic(model=model, max_tokens=4000)
+        llm = CustomChatAnthropic(model=app_data.model, max_tokens=4000)
         
         # ツールのバインド
         valid_tools = []
-        if tools:
-            for tool in tools:
-                if hasattr(tool, '__call__') and hasattr(tool, 'name'):
-                    valid_tools.append(tool)
-            
-            if valid_tools:
-                llm = llm.bind_tools(valid_tools)
+        for tool_name, tool in app_data.tools.items():
+            if hasattr(tool, 'functions'):
+                for func in tool.functions:
+                    if hasattr(func, '__call__') and hasattr(func, 'name'):
+                        valid_tools.append(func)
+        
+        if valid_tools:
+            llm = llm.bind_tools(valid_tools)
         
         # ストリーミング対応LLMノードの定義
         def llm_node(state: MessagesState):
-            """LLMノード: メッセージを受け取り、AIの応答を返す（ストリーミング対応）"""
+            """LLMノード: メッセージを受け取り、AIの応答を返す"""
             messages = state["messages"]
-            
-            # 直接的な応答生成（ストリーミングは後で実装）
             response = llm.invoke(messages)
             return {"messages": [response]}
         
@@ -288,167 +259,122 @@ class AI:
         workflow = StateGraph(MessagesState)
         workflow.add_node("llm", llm_node)
         
-        # ツールノードの追加（有効なツールがある場合のみ）
         if valid_tools:
-            tool_node = ToolNode(valid_tools)
-            workflow.add_node("tools", tool_node)
-            # エッジの定義
-            workflow.add_edge(START, "llm")
+            workflow.add_node("tools", ToolNode(valid_tools))
             workflow.add_conditional_edges("llm", tools_condition)
             workflow.add_edge("tools", "llm")
-            workflow.add_edge("llm", END)
-        else:
-            workflow.add_edge(START, "llm")
-            workflow.add_edge("llm", END)
         
-        # グラフのコンパイル
+        workflow.add_edge(START, "llm")
+        workflow.add_edge("llm", END)
+        
+        # エージェントのコンパイル
         cls._agent = workflow.compile()
         cls._initialized = True
     
     @classmethod
     def send(cls) -> str:
-        """AIにデータ送信"""
-        # 送信前にSystemMessage位置を検証
-        cls._app_data._validate_system_message_position()
+        """メッセージを送信してAI応答を取得"""
+        if not cls._initialized or cls._agent is None:
+            raise RuntimeError("AIが初期化されていません")
         
-        # LangGraphエージェントを実行
-        result = cls._agent.invoke({"messages": cls._app_data.messages})
-            
-        # 結果のメッセージを取得してAppDataに保存
-        cls._app_data.messages = result["messages"]
+        # メッセージを送信
+        response = cls._agent.invoke({"messages": cls._app_data.messages})
         
-        # 受信後にSystemMessage位置を検証
-        cls._app_data._validate_system_message_position()
+        # 新しいメッセージ（AI応答）のみを追加
+        # response["messages"]には送信したメッセージ全体が含まれるため、
+        # 既存のメッセージ数以降の新しいメッセージのみを追加
+        current_count = len(cls._app_data.messages)
+        for message in response["messages"][current_count:]:
+            cls._app_data.add_message(message)
         
-        # 最後のAIメッセージの内容を返す
-        for msg in reversed(cls._app_data.messages):
-            if isinstance(msg, AIMessage):
-                return msg.content
-        return ""
+        return "AI応答完了"
     
     @classmethod
-    def initialize_from_settings(cls, model: str, tools: List = None, system_prompt: str = "", app_data: AppData = None) -> None:
+    def initialize_from_settings(cls, app_data: AppData) -> None:
         """設定からAIを初期化"""
-        cls._initialize(model, system_prompt, app_data, tools)
+        cls._initialize(app_data)
 
 
 def get_user_input() -> str:
-    """ユーザー入力取得"""
-    return input("> ")
+    """ユーザー入力を取得"""
+    return input("ユーザー: ")
 
 
 def execute_plugins_until_ready_for_ai(app_data: AppData) -> None:
-    """ready_for_ai = trueになるまでプラグインを順次実行"""
-    # プラグインが無効の場合は即座にready_for_aiをtrueに設定
-    if not app_data["plugins"]:
-        app_data["flags"]["ready_for_ai"] = True
-        return
+    """ready_for_aiがTrueになるまでプラグインを実行"""
+    max_iterations = 100
+    iteration = 0
     
-    # 既にready_for_aiがtrueの場合は何もしない
-    if app_data["flags"]["ready_for_ai"]:
-        return
-    
-    max_iterations = 100  # 無限ループ防止
-    
-    for i in range(max_iterations):
-        # 全プラグインのon_flag()実行
-        for plugin_name, plugin in app_data["plugins"].items():
-            plugin.on_flag(app_data)
+    while not app_data.flags.get("ready_for_ai", False) and iteration < max_iterations:
+        iteration += 1
         
-        # ready_for_aiフラグチェック
-        if app_data["flags"]["ready_for_ai"]:
-            break
-    else:
-        raise RuntimeError("プラグインループ最大回数超過: ready_for_ai")
+        for plugin_name, plugin in app_data.plugins.items():
+            if hasattr(plugin, 'on_flag'):
+                plugin.on_flag(app_data)
+        
+        if iteration >= max_iterations:
+            raise RuntimeError("プラグイン実行が無限ループになりました")
 
 
 def execute_plugins_until_ready_for_user(app_data: AppData) -> None:
-    """ready_for_user = trueになるまでプラグインを順次実行"""
-    # プラグインが無効の場合は即座にready_for_userをtrueに設定
-    if not app_data["plugins"]:
-        app_data["flags"]["ready_for_user"] = True
-        return
+    """ready_for_userがTrueになるまでプラグインを実行"""
+    max_iterations = 100
+    iteration = 0
     
-    # 既にready_for_userがtrueの場合は何もしない
-    if app_data["flags"]["ready_for_user"]:
-        return
-    
-    max_iterations = 100  # 無限ループ防止
-    
-    for i in range(max_iterations):
-        # 全プラグインのon_flag()実行
-        for plugin_name, plugin in app_data["plugins"].items():
-            plugin.on_flag(app_data)
+    while not app_data.flags.get("ready_for_user", False) and iteration < max_iterations:
+        iteration += 1
         
-        # ready_for_userフラグチェック
-        if app_data["flags"]["ready_for_user"]:
-            break
-    else:
-        raise RuntimeError("プラグインループ最大回数超過: ready_for_user")
+        for plugin_name, plugin in app_data.plugins.items():
+            if hasattr(plugin, 'on_flag'):
+                plugin.on_flag(app_data)
+        
+        if iteration >= max_iterations:
+            raise RuntimeError("プラグイン実行が無限ループになりました")
 
 
 def close_plugins(app_data: AppData) -> None:
-    """プラグインの終了処理"""
-    for plugin_name, plugin in app_data["plugins"].items():
+    """プラグインのクリーンアップ"""
+    for plugin_name, plugin in app_data.plugins.items():
         if hasattr(plugin, 'cleanup'):
             plugin.cleanup()
 
 
 def main() -> None:
-    """Craft AI メインライフサイクル"""
+    """メイン関数"""
+    app_data = AppData("settings.json")
+    
     try:
-        # === 初期化フェーズ ===
-        app_data = AppData("settings.json")
+        input_index = 0
         
-        # === メインループ ===
-        while True:
-            # フラグの初期化
-            app_data["flags"]["ready_for_ai"] = False
-            app_data["flags"]["ready_for_user"] = False
+        while input_index < len(app_data.inputs):
+            user_input = app_data.inputs[input_index]
+            input_index += 1
             
-            # inputs配列の処理
-            if len(app_data["inputs"]) > 0:
-                # inputs配列から最初の入力を取得
-                user_input = app_data["inputs"].pop(0)
-            else:
-                # inputs配列が空の場合はユーザー入力を求める
-                user_input = get_user_input()
-            
-            # exitコマンドの処理（inputs配列からの場合も即座に終了）
             if user_input.lower() == "exit":
-                close_plugins(app_data)
-                return
-                
-            # ユーザー入力をメッセージに追加
+                break
+            
+            # ユーザーメッセージを追加
             app_data.add_message(HumanMessage(content=user_input))
             
-            # ユーザー入力後フラグ設定。自動でafter_ai_response=falseになる仕様
-            app_data["flags"]["after_user_input"] = True
-            app_data["flags"]["after_ai_response"] = False
-            
-            # ready_for_ai = trueになるまでプラグインの順次実行をループする
+            # AI応答前の処理
+            app_data.flags["after_user_input"] = True
+            app_data.flags["ready_for_ai"] = False
             execute_plugins_until_ready_for_ai(app_data)
             
-            # AIにデータ送信。AIはAppDataには含まれないグローバル変数
-            ai_response = AI.send()
+            # AI応答
+            AI.send()
             
-            # AI応答後フラグ設定。自動でafter_user_input=falseになる仕様
-            app_data["flags"]["after_ai_response"] = True
-            app_data["flags"]["after_user_input"] = False
-            
-            # ready_for_user = trueになるまでプラグインの順次実行をループする
+            # AI応答後の処理
+            app_data.flags["after_ai_response"] = True
+            app_data.flags["after_user_input"] = False
+            app_data.flags["ready_for_user"] = False
             execute_plugins_until_ready_for_user(app_data)
-    
-    except KeyboardInterrupt:
-        # Ctrl+C検出時の終了処理
-        try:
-            close_plugins(app_data)
-        except NameError:
-            # app_dataが初期化されていない場合
-            pass
+            
+            # フラグリセット
+            app_data.flags["after_ai_response"] = False
     
     finally:
-        pass
+        close_plugins(app_data)
 
 
 if __name__ == "__main__":
